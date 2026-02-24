@@ -876,6 +876,14 @@
         },
         "elixirCost": 4
     },
+    "28000006": {
+        "name": "Mirror",
+        "rarity": "epic",
+        "iconUrls": {
+            "medium": "https://api-assets.clashroyale.com/cards/300/wC6Cm9rKLEOk72zTsukVwxewKIoO4ZcMJun54zCPWvA.png"
+        },
+        "elixirCost": 0
+    },
     "28000007": {
         "name": "Lightning",
         "rarity": "epic",
