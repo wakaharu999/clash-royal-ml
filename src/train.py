@@ -9,7 +9,7 @@ from model.transformer import DeckTransformer
 
 EPOCHS = 5
 BATCH_SIZE = 64
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 1e-4
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 print(f"使用デバイス: {device}")

@@ -20,7 +20,7 @@ model.eval() # 推論モードに切り替え
 
 print("=== AIの実力テスト（Top5予測） ===")
 # 試しに最初の5個のテストデッキを解かせてみる
-for i in range(5):
+for i in range(10):
     # テストデータから1問取得
     x, y = test_dataset[i]
     x_input = x.unsqueeze(0).to(device) # バッチ次元(1)を追加してモデルに入れる

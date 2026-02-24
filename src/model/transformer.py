@@ -23,7 +23,7 @@ class DeckTransformer(nn.Module):
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
-        # 3. 出力層（各ポジションに入るカードが「全121種類のうちどれか」を確率で出力）
+        # 3. 出力層（各ポジションに入るカードが「全122種類のうちどれか」を確率で出力）
         self.fc_out = nn.Linear(d_model, vocab_size)
 
     def forward(self, x):
