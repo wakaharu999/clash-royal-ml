@@ -14,7 +14,7 @@ idx_to_name[test_dataset.mask_idx] = "[MASK (隠されたカード)]"
 
 # 2. 学習済みモデルの読み込み
 model = DeckTransformer(vocab_size=test_dataset.vocab_size).to(device)
-model_path = "/Users/haru/Documents/GitHub/clash-royal-ml/learned_models/deck_transformer.pth"
+model_path = "/Users/haru/Documents/GitHub/clash-royal-ml/learned_models/deck_transformer202602.pth"
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.eval() # 推論モードに切り替え
 
