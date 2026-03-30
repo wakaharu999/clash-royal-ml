@@ -7,5 +7,5 @@ matplotlib
 seaborn
 tqdm
 jupyterlab
-streamlit
-torch>=1.32.0
+streamlit>=1.32.0
+torch
