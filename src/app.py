@@ -3,14 +3,13 @@ import os
 import json
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from match_model import CrossAttentionPredictor
+from src.match_model import CrossAttentionPredictor
 
 app = FastAPI(title="Clash Royale Match API")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_PATH = os.path.join(BASE_DIR, 'models', 'best_model.pth')
-CARDS_JSON_PATH = os.path.join(BASE_DIR, 'cards.json')
-
+CARDS_JSON_PATH = os.path.join(BASE_DIR, 'data', 'cards.json')
 # 1. マスターデータのロードとマッピング作成
 def load_card_master():
     with open(CARDS_JSON_PATH, 'r', encoding='utf-8') as f:

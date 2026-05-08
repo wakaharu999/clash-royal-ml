@@ -1,11 +1,8 @@
-requests
-pandas
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.11.0+cpu
+fastapi
+uvicorn
+pydantic
 numpy
-torch
-scikit-learn
-matplotlib
-seaborn
-tqdm
-jupyterlab
-streamlit>=1.32.0
-torch
+pandas
