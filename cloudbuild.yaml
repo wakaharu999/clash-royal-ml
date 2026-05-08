@@ -1,0 +1,34 @@
+steps:
+  # 1. Dockerイメージのビルド
+  # (Cloud BuildのサーバーはIntel製なので、Macのようなアーキテクチャ問題は起きません)
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'build'
+      - '-t'
+      - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/app-repo/clash-royale-api:$COMMIT_SHA'
+      - '.'
+
+  # 2. Artifact Registry へイメージをプッシュ (保存)
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'push'
+      - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/app-repo/clash-royale-api:$COMMIT_SHA'
+
+  # 3. Cloud Run への自動デプロイ
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'clash-royale-api'
+      - '--image'
+      - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/app-repo/clash-royale-api:$COMMIT_SHA'
+      - '--region'
+      - 'asia-northeast1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+
+# ビルドしたイメージの情報を記録
+images:
+  - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/app-repo/clash-royale-api:$COMMIT_SHA'
