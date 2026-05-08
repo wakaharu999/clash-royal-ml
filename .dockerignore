@@ -1,0 +1,19 @@
+# 仮想環境
+venv/
+.env
+
+# キャッシュファイル
+__pycache__/
+*.pyc
+
+# Git
+.git/
+.gitignore
+
+# 不要なデータファイル・ノートブック
+*.csv
+*.ipynb
+notebooks/
+
+# macOSのシステムファイル
+.DS_Store
