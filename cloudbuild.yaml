@@ -32,3 +32,6 @@ steps:
 # ビルドしたイメージの情報を記録
 images:
   - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/app-repo/clash-royale-api:$COMMIT_SHA'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
