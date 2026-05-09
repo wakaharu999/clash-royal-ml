@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MultiLabelBinarizer
-
+from torch_geometric.nn import RGCNConv
 # ==========================================
 # データセットの定義 (PyTorch用)
 # ==========================================
@@ -67,6 +67,39 @@ def prepare_dataloaders(csv_path, encoder_type="multi-hot", test_size=0.2, batch
 
     return train_loader, test_loader, vector_dim, len(Y)
 
+# ==========================================
+# 追加：グローバルグラフからカードの「環境理解ベクトル」を生成するGNN
+# ==========================================
+class GlobalRGCNEncoder(nn.Module):
+    def __init__(self, num_cards, num_roles=4, role_dim=16, embed_dim=128):
+        super().__init__()
+        # 1. IDベースの埋め込み (128 - 16 = 112次元)
+        self.id_emb = nn.Embedding(num_cards, embed_dim - role_dim)
+        
+        # 2. 役割(Role)ベースの埋め込み (16次元)
+        self.role_emb = nn.Embedding(num_roles, role_dim)
+        
+        # 3. マルチリレーショナルGCN層 (3つの関係性を処理)
+        # 0:シナジー, 1:カウンター, 2:重量競合
+        self.conv1 = RGCNConv(embed_dim, embed_dim, num_relations=3)
+        self.conv2 = RGCNConv(embed_dim, embed_dim, num_relations=3)
+        
+        self.relu = nn.ReLU()
+
+    def forward(self, edge_index, edge_type, node_roles):
+        # [Step 1] IDベクトルと役割ベクトルをガッチャンコして128次元の初期値を作る
+        x_id = self.id_emb.weight # 全カードのIDベクトル [num_cards, 112]
+        x_role = self.role_emb(node_roles) # 全カードの役割ベクトル [num_cards, 16]
+        x = torch.cat([x_id, x_role], dim=-1) # -> [num_cards, 128]
+        
+        # [Step 2] グラフ上での情報伝達 (環境のメタを学習)
+        x = self.conv1(x, edge_index, edge_type)
+        x = self.relu(x)
+        x = self.conv2(x, edge_index, edge_type)
+        
+        # 全カードの「最新の環境理解ベクトル」を返す
+        return x
+    
 # ==========================================
 # 予測モデル本体 (ベースモデル)
 # ==========================================
@@ -186,5 +219,51 @@ class AttentionPoolingPredictor(nn.Module):
         pool_B = torch.sum(attn_B2A * weight_B, dim=1)
         
         # [Step 4] 自分と相手のデッキ総合力を結合して判定
+        x = torch.cat([pool_A, pool_B], dim=1)
+        return self.fc(x)
+    
+class GNNPredictor(nn.Module):
+    # 🌟 pretrained_embeddings の代わりに、rgcn_encoder を受け取るように変更
+    def __init__(self, rgcn_encoder, embed_dim=128):
+        super().__init__()
+        # GNNエンコーダを内部に保持
+        self.rgcn = rgcn_encoder
+        
+        self.cross_attn = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=4, batch_first=True)
+        
+        self.attention_pooling = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim // 2),
+            nn.Tanh(),
+            nn.Linear(embed_dim // 2, 1)
+        )
+
+        self.fc = nn.Sequential(
+            nn.Linear(embed_dim * 2, 64),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(64, 1)
+        )
+
+    # 🌟 グラフデータもforwardの引数に追加
+    def forward(self, deck_A, deck_B, edge_index, edge_type, node_roles):
+        # [Step 1] まずGNNを走らせて、全120枚の「最新の環境ベクトル」を生成する！
+        global_card_embeddings = self.rgcn(edge_index, edge_type, node_roles)
+        
+        # [Step 2] その辞書の中から、いま対戦している8枚のベクトルだけを引っ張ってくる
+        emb_A = global_card_embeddings[deck_A] # (batch, 8, embed_dim)
+        emb_B = global_card_embeddings[deck_B]
+        
+        # --- これ以降 (Cross Attention と Pooling) は前回と全く同じ！ ---
+        attn_A2B, _ = self.cross_attn(query=emb_A, key=emb_B, value=emb_B) 
+        attn_B2A, _ = self.cross_attn(query=emb_B, key=emb_A, value=emb_A) 
+        
+        score_A = self.attention_pooling(attn_A2B)
+        score_B = self.attention_pooling(attn_B2A)
+        weight_A = torch.softmax(score_A, dim=1)
+        weight_B = torch.softmax(score_B, dim=1)
+        
+        pool_A = torch.sum(attn_A2B * weight_A, dim=1)
+        pool_B = torch.sum(attn_B2A * weight_B, dim=1)
+        
         x = torch.cat([pool_A, pool_B], dim=1)
         return self.fc(x)

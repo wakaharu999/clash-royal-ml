@@ -11,8 +11,7 @@ if __name__ == "__main__":
 
     # --- 1. 設定 ---
     CSV_PATH = 'data/matches.csv'
-    #ENCODER_TYPE = "transformer" # "multi-hot,  "transformer" のいずれかを選択
-    ENCODER_TYPE = "raw_id"
+    ENCODER_TYPE = "raw_id" # "transformer", "multi-hot,  "raw_id" のいずれかを選択
     EPOCHS = 100      
     LR = 0.001
     PATIENCE = 5       # 最高記録を更新できなくても、何エポック我慢するか
@@ -51,9 +50,9 @@ if __name__ == "__main__":
         print(f"⚠️ エラー: ファイル '{pretrained_path}' が見つかりません。ランダム初期化で進めます。")
         pretrained_weights = None
 
-    #model = CrossAttentionPredictor(num_cards=vector_dim, embed_dim= EMBED_DIM, pretrained_embeddings=pretrained_weights).to(device)
+    model = CrossAttentionPredictor(num_cards=vector_dim, embed_dim= EMBED_DIM, pretrained_embeddings=pretrained_weights).to(device)
     #model = MatchupPredictor(vector_dim=vector_dim).to(device)
-    model = AttentionPoolingPredictor(num_cards=vector_dim, embed_dim=EMBED_DIM, pretrained_embeddings=pretrained_weights).to(device)
+    #model = AttentionPoolingPredictor(num_cards=vector_dim, embed_dim=EMBED_DIM, pretrained_embeddings=pretrained_weights).to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=LR)
     criterion = nn.BCEWithLogitsLoss()
