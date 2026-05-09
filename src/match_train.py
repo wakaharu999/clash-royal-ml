@@ -4,8 +4,7 @@ import torch.optim as optim
 import numpy as np
 import os
 from sklearn.metrics import accuracy_score, roc_auc_score
-from match_model import MatchupPredictor, prepare_dataloaders
-from match_model import MatchupPredictor, CrossAttentionPredictor, prepare_dataloaders
+from match_model import MatchupPredictor, CrossAttentionPredictor, AttentionPoolingPredictor, prepare_dataloaders
 
 if __name__ == "__main__":
     print("🚀 勝敗予測モデルの学習を開始します (Early Stopping搭載)...")
@@ -27,7 +26,6 @@ if __name__ == "__main__":
     )
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    #model = MatchupPredictor(vector_dim=vector_dim).to(device)
 
     EMBED_DIM = 128
     pretrained_path = 'models/deck_encoder.pth'
@@ -53,7 +51,10 @@ if __name__ == "__main__":
         print(f"⚠️ エラー: ファイル '{pretrained_path}' が見つかりません。ランダム初期化で進めます。")
         pretrained_weights = None
 
-    model = CrossAttentionPredictor(num_cards=vector_dim, embed_dim= EMBED_DIM, pretrained_embeddings=pretrained_weights).to(device)
+    #model = CrossAttentionPredictor(num_cards=vector_dim, embed_dim= EMBED_DIM, pretrained_embeddings=pretrained_weights).to(device)
+    #model = MatchupPredictor(vector_dim=vector_dim).to(device)
+    model = AttentionPoolingPredictor(num_cards=vector_dim, embed_dim=EMBED_DIM, pretrained_embeddings=pretrained_weights).to(device)
+
     optimizer = optim.Adam(model.parameters(), lr=LR)
     criterion = nn.BCEWithLogitsLoss()
 
