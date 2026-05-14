@@ -1,140 +1,136 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import numpy as np
-import os
-from sklearn.metrics import accuracy_score, roc_auc_score
-from match_model import MatchupPredictor, CrossAttentionPredictor, AttentionPoolingPredictor, prepare_dataloaders
+from torch.utils.data import DataLoader, TensorDataset
+import pandas as pd
+import ast
+import json
 
-if __name__ == "__main__":
-    print("🚀 勝敗予測モデルの学習を開始します (Early Stopping搭載)...")
+# 作成したモデルをインポート
+from match_model import MagNetEncoder, SimpleSumPredictor
 
-    # --- 1. 設定 ---
-    CSV_PATH = 'data/matches.csv'
-    #ENCODER_TYPE = "transformer" # "multi-hot,  "transformer" のいずれかを選択
-    ENCODER_TYPE = "raw_id"
-    EPOCHS = 100      
-    LR = 0.001
-    PATIENCE = 5       # 最高記録を更新できなくても、何エポック我慢するか
-    SAVE_PATH = 'best_model.pth' # 最高成績のモデルを保存するファイル名
+# --- 設定パラメータ ---
+GRAPH_PATH = "data/directed_graph.pt"
+MATCHES_CSV_PATH = "data/matches.csv"
+CARDS_JSON_PATH = "data/cards.json"
 
-    # --- 2. データの準備 ---
-    print(f"📦 データを読み込み、前処理を行っています (モード: {ENCODER_TYPE})...")
-    train_loader, test_loader, vector_dim, total_samples = prepare_dataloaders(
-        csv_path=CSV_PATH, 
-        encoder_type=ENCODER_TYPE
-    )
+HIDDEN_DIM = 128
+BATCH_SIZE = 256
+EPOCHS = 50
+LEARNING_RATE = 1e-3
+
+def load_card_mapping():
+    with open(CARDS_JSON_PATH, 'r', encoding='utf-8') as f:
+        cards_data = json.load(f)
+    card_ids = sorted([item['id'] for item in cards_data['items']])
+    id_to_idx = {cid: i for i, cid in enumerate(card_ids)}
+    return id_to_idx, len(card_ids)
+
+def prepare_dataset(id_to_idx):
+    """対戦データをPyTorchのDatasetに変換"""
+    df = pd.read_csv(MATCHES_CSV_PATH)
     
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    EMBED_DIM = 128
-    pretrained_path = 'models/deck_encoder.pth'
-
-    print(f"📦 事前学習ファイル {pretrained_path} を読み込んでいます...")
-    try:
-        state_dict = torch.load(pretrained_path, map_location=device, weights_only=True)
-        target_key = 'embedding.weight' 
+    my_decks = []
+    op_decks = []
+    labels = []
+    
+    for _, row in df.iterrows():
+        my_deck = [int(row[f'my_{i}']) for i in range(8)]
+        op_deck = [int(row[f'op_{i}']) for i in range(8)]
         
-        if target_key in state_dict:
-            # 🌟 MASKトークンの分（最後の1行）を除外して、純粋なカードだけの重みを抽出する
-            raw_weights = state_dict[target_key]
+        try:
+            m_idx = [id_to_idx[c] for c in my_deck]
+            o_idx = [id_to_idx[c] for c in op_deck]
+        except KeyError:
+            continue
             
-            # vector_dim（今回はカードの種類数, 約122）分だけをスライスして取り出す
-            pretrained_weights = raw_weights[:vector_dim, :].detach().clone()
-            
-            print(f"✨ 成功: '{target_key}' から {pretrained_weights.shape[0]}枚分のカードの記憶を抽出しました！")
-        else:
-            print(f"⚠️ エラー: '{target_key}' が見つかりません。ランダム初期化で進めます。")
-            pretrained_weights = None
-            
-    except FileNotFoundError:
-        print(f"⚠️ エラー: ファイル '{pretrained_path}' が見つかりません。ランダム初期化で進めます。")
-        pretrained_weights = None
+        # ここは既に my/op が分かれているので、Data Augmentation は不要（またはシンプルに）
+        my_decks.append(m_idx)
+        op_decks.append(o_idx)
+        labels.append(float(row['result']))
 
-    #model = CrossAttentionPredictor(num_cards=vector_dim, embed_dim= EMBED_DIM, pretrained_embeddings=pretrained_weights).to(device)
-    #model = MatchupPredictor(vector_dim=vector_dim).to(device)
-    model = AttentionPoolingPredictor(num_cards=vector_dim, embed_dim=EMBED_DIM, pretrained_embeddings=pretrained_weights).to(device)
+    my_decks_tensor = torch.tensor(my_decks, dtype=torch.long)
+    op_decks_tensor = torch.tensor(op_decks, dtype=torch.long)
+    labels_tensor = torch.tensor(labels, dtype=torch.float32)
+    
+    return TensorDataset(my_decks_tensor, op_decks_tensor, labels_tensor)
 
-    optimizer = optim.Adam(model.parameters(), lr=LR)
+def train():
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+
+    # 1. データとグラフの読み込み
+    id_to_idx, num_cards = load_card_mapping()
+    dataset = prepare_dataset(id_to_idx)
+    
+    # 学習用と検証用に分割 (8:2)
+    train_size = int(0.8 * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+    
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    
+    # MagNet用に構築した有向グラフをロード
+    graph_data = torch.load(GRAPH_PATH).to(device)
+    edge_index = graph_data.edge_index
+    edge_weight = graph_data.edge_attr
+
+    # 2. モデルの初期化
+    encoder = MagNetEncoder(num_cards=num_cards, hidden_dim=HIDDEN_DIM).to(device)
+    predictor = SimpleSumPredictor(hidden_dim=HIDDEN_DIM).to(device)
+    
+    # BCEWithLogitsLoss は内部でSigmoidをかけるので、Predictorの出力(Logit)をそのまま渡せる
     criterion = nn.BCEWithLogitsLoss()
+    
+    # 2つのモデルのパラメータを同時に最適化 (End-to-End学習)
+    optimizer = optim.Adam(list(encoder.parameters()) + list(predictor.parameters()), lr=LEARNING_RATE)
 
-    # --- 3. 学習ループ (Early Stopping搭載) ---
-    print(f"🔥 学習スタート (最大 {EPOCHS} epochs)...")
-    
-    best_val_acc = 0.0 # 最高正答率を記録する変数
-    patience_counter = 0 # 我慢カウンター
-    
-    for epoch in range(1, EPOCHS + 1):
-        # -------------------------
-        # [A] 訓練フェーズ (Train)
-        # -------------------------
-        model.train()
-        train_loss = 0
-        for dA, dB, labels in train_loader:
-            dA, dB, labels = dA.to(device), dB.to(device), labels.to(device)
+    # 3. 学習ループ
+    print("--- 学習開始 ---")
+    for epoch in range(EPOCHS):
+        encoder.train()
+        predictor.train()
+        total_loss = 0
+        
+        for my_decks, op_decks, labels in train_loader:
+            my_decks, op_decks, labels = my_decks.to(device), op_decks.to(device), labels.to(device)
+            
             optimizer.zero_grad()
-            outputs = model(dA, dB)
-            loss = criterion(outputs, labels)
+            
+            # (A) Encoderで全カードの複素数ベクトル(実部・虚部)を生成
+            x_real, x_imag = encoder(edge_index, edge_weight)
+            
+            # (B) Predictorで特定のバッチのデッキを抽出し、勝敗判定
+            logits = predictor(x_real, x_imag, my_decks, op_decks)
+            
+            # 損失計算と逆伝播
+            loss = criterion(logits, labels)
             loss.backward()
             optimizer.step()
-            train_loss += loss.item()
             
-        avg_train_loss = train_loss / len(train_loader)
-
-        # -------------------------
-        # [B] 評価フェーズ (Validation)
-        # -------------------------
-        model.eval()
-        val_loss = 0
-        all_preds, all_labels = [], []
+            total_loss += loss.item()
+            
+        # 4. 検証ループ (Validation)
+        encoder.eval()
+        predictor.eval()
+        correct = 0
+        total = 0
         
         with torch.no_grad():
-            for dA, dB, labels in test_loader:
-                dA, dB, labels = dA.to(device), dB.to(device), labels.to(device)
-                outputs = model(dA, dB)
+            for my_decks, op_decks, labels in val_loader:
+                my_decks, op_decks, labels = my_decks.to(device), op_decks.to(device), labels.to(device)
                 
-                # TestデータでのLossも計算
-                loss = criterion(outputs, labels)
-                val_loss += loss.item()
+                x_real, x_imag = encoder(edge_index, edge_weight)
+                logits = predictor(x_real, x_imag, my_decks, op_decks)
                 
-                # 正答率計算のための準備
-                probs = torch.sigmoid(outputs).cpu().numpy()
-                all_preds.extend(probs)
-                all_labels.extend(labels.cpu().numpy())
+                # 0より大きければ my_deck の勝ちと予測
+                preds = (logits > 0).float()
+                correct += (preds == labels).sum().item()
+                total += labels.size(0)
+                
+        val_acc = correct / total
+        print(f"Epoch {epoch+1}/{EPOCHS} | Train Loss: {total_loss/len(train_loader):.4f} | Val Acc: {val_acc:.4f}")
 
-        avg_val_loss = val_loss / len(test_loader)
-        
-        # Testデータでの正答率を計算
-        all_preds = np.array(all_preds)
-        all_labels = np.array(all_labels)
-        binary_preds = (all_preds >= 0.5).astype(int)
-        val_acc = accuracy_score(all_labels, binary_preds)
-
-        # ログ出力 (TrainとTestを横並びで比較！)
-        print(f"Epoch {epoch:3d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc*100:.2f}%", end="")
-
-        # -------------------------
-        # [C] Early Stopping の判定
-        # -------------------------
-        if val_acc > best_val_acc:
-            # 最高記録を更新した場合！
-            best_val_acc = val_acc
-            patience_counter = 0 # カウンターをリセット
-            # 現在のモデルの状態(重み)をファイルに保存
-            torch.save(model.state_dict(), SAVE_PATH)
-            print(" 🌟 記録更新！モデルを保存しました")
-        else:
-            # 更新できなかった場合
-            patience_counter += 1
-            print(f" ⚠️ 更新なし ({patience_counter}/{PATIENCE})")
-            
-            if patience_counter >= PATIENCE:
-                print(f"\n🛑 {PATIENCE}エポック連続で改善が見られなかったため、学習を早期終了(Early Stopping)します！")
-                break
-
-    # --- 4. 最終結果の表示 ---
-    print("\n" + "="*40)
-    print(f"🏆 学習完了！")
-    print(f"✨ ベストなテスト正答率: {best_val_acc*100:.2f}%")
-    print(f"💾 ベストモデルは '{SAVE_PATH}' に保存されています")
-    print("="*40)
+if __name__ == "__main__":
+    train()

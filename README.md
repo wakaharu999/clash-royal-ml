@@ -36,12 +36,12 @@
 - 公式API`https://developer.clashroyale.com/#/`から得られたデータを元に勝率を予測します。
 - 収集したデッキや対戦データはある程度の実力の拮抗を保証するため、グローバルランキング上位のプレイヤーを対象にして対戦履歴から芋づる的に収集しました。
     - デッキデータ：60万件
-    - 対戦データ：5000件（実力者同士の対戦結果）
+    - 対戦データ：2万件（実力者同士の対戦結果）
 
 ## 技術スタック
 - **Machine Learning:** PyTorch, PyTorch Geometric (PyG)
 - **Backend / API:** FastAPI, Uvicorn, Pydantic
-- **Infrastructure:** Docker, Google Cloud Run
+- **Infrastructure:** Docker, Google Cloud Run, Cloud build
 - **Data Engineering:** Pandas, NumPy
 
 ## 既存実験

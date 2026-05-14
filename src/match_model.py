@@ -1,190 +1,89 @@
-# matchup_model.py
-import pandas as pd
-import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MultiLabelBinarizer
+import torch.nn.functional as F
+from pytorch_geometric_signed_directed.nn.directed import MagNetConv # type: ignore
 
-# ==========================================
-# データセットの定義 (PyTorch用)
-# ==========================================
-class BattleDataset(Dataset):
-    def __init__(self, decks_A, decks_B, labels):
-        # 整数(raw_id)ならlong型、小数(multi-hot)ならfloat32型に自動調整
-        dt = torch.long if decks_A.dtype == np.int64 else torch.float32
-        self.decks_A = torch.tensor(decks_A, dtype=dt)
-        self.decks_B = torch.tensor(decks_B, dtype=dt)
-        self.labels = torch.tensor(labels, dtype=torch.float32).unsqueeze(1)
-
-    def __len__(self):
-        return len(self.labels)
-
-    def __getitem__(self, idx):
-        return self.decks_A[idx], self.decks_B[idx], self.labels[idx]
-
-
-# ==========================================
-# データ一括処理関数（読み込み〜水増し〜ローダー化）
-# ==========================================
-def prepare_dataloaders(csv_path, encoder_type="multi-hot", test_size=0.2, batch_size=64):
-    df_battles = pd.read_csv(csv_path)
-    my_cols = [f'my_{i}' for i in range(8)]
-    op_cols = [f'op_{i}' for i in range(8)]
-    decks1 = df_battles[my_cols].values.tolist()
-    decks2 = df_battles[op_cols].values.tolist()
-    winners = (df_battles['result'] == 1).astype(np.float32)
-
-    all_cards = np.unique(df_battles[my_cols + op_cols].values).tolist()
-
-    if encoder_type == "multi-hot":
-        mlb = MultiLabelBinarizer(classes=all_cards)
-        vec_decks1 = np.asarray(mlb.fit_transform(decks1), dtype=np.float32)
-        vec_decks2 = np.asarray(mlb.fit_transform(decks2), dtype=np.float32)
-        vector_dim = len(all_cards)
-
-    elif encoder_type == "raw_id":
-        card_to_idx = {card: i for i, card in enumerate(all_cards)}
-        vec_decks1 = np.array([[card_to_idx[c] for c in deck] for deck in decks1], dtype=np.int64)
-        vec_decks2 = np.array([[card_to_idx[c] for c in deck] for deck in decks2], dtype=np.int64)
-        vector_dim = len(all_cards) # カードの種類数（約122）
-    else:
-        raise ValueError("不明なエンコーダ")
-
-    X_A = np.vstack((vec_decks1, vec_decks2))
-    X_B = np.vstack((vec_decks2, vec_decks1))
-    Y = np.concatenate((winners, 1.0 - winners))
-
-    X_A_train, X_A_test, X_B_train, X_B_test, Y_train, Y_test = train_test_split(
-        X_A, X_B, Y, test_size=test_size, random_state=42
-    )
-
-    train_dataset = BattleDataset(X_A_train, X_B_train, Y_train)
-    test_dataset = BattleDataset(X_A_test, X_B_test, Y_test)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-    return train_loader, test_loader, vector_dim, len(Y)
-
-# ==========================================
-# 予測モデル本体 (ベースモデル)
-# ==========================================
-class MatchupPredictor(nn.Module):
-    def __init__(self, vector_dim):
+class MagNetEncoder(nn.Module):
+    """
+    全カードの有向グラフ（カウンター関係）を読み込み、
+    各カードの「繋がり（実部）」と「相性の方向（虚部）」を複素数ベクトルとしてエンコードするモデル
+    """
+    def __init__(self, num_cards, hidden_dim, q=0.25, K=1):
         super().__init__()
-        self.fc1 = nn.Linear(vector_dim * 2, 128)
-        self.fc2 = nn.Linear(128, 64)
-        self.out = nn.Linear(64, 1)
+        # カードの初期ベクトル（実数のみを想定）
+        self.card_embedding = nn.Embedding(num_cards, hidden_dim)
         
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.3)
+        # MagNetConv層の定義
+        # K: チェビシェフ多項式の次数（通常1か2）
+        # q: 磁荷（位相の回転角を制御するパラメータ。0.25がよく使われる）
+        self.conv1 = MagNetConv(in_channels=hidden_dim, out_channels=hidden_dim, K=K, q=q, trainable_q=False)
+        self.conv2 = MagNetConv(in_channels=hidden_dim, out_channels=hidden_dim, K=K, q=q, trainable_q=False)
 
-    def forward(self, deck_A, deck_B):
-        x = torch.cat([deck_A, deck_B], dim=1)
-        x = self.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.relu(self.fc2(x))
-        x = self.dropout(x)
-        return self.out(x)
-    
-# ==========================================
-# 新モデル: Cross-Attention Predictor
-# ==========================================
-class CrossAttentionPredictor(nn.Module):
-    def __init__(self, num_cards, embed_dim=64,pretrained_embeddings=None):
+    def forward(self, edge_index, edge_weight=None):
+        device = self.card_embedding.weight.device
+        num_cards = self.card_embedding.num_embeddings
+        
+        # 全ノード（カード）のインデックスを生成
+        x = torch.arange(num_cards, device=device)
+
+        # 1. 初期状態の定義（最初は実数のみ、虚部はゼロからスタート）
+        x_real = self.card_embedding(x)
+        x_imag = torch.zeros_like(x_real)
+
+        # 2. MagNet第1層（ここでペッカとメガナイトの位相がズレ始める）
+        x_real, x_imag = self.conv1(x_real, x_imag, edge_index, edge_weight)
+        x_real = F.relu(x_real)
+        x_imag = F.relu(x_imag) # 実部と虚部をそれぞれ活性化
+
+        # 3. MagNet第2層（より深い間接的な相性を学習）
+        x_real, x_imag = self.conv2(x_real, x_imag, edge_index, edge_weight)
+
+        # 最終的な全カードの複素数表現（実部と虚部）を返す
+        return x_real, x_imag
+
+
+class SimpleSumPredictor(nn.Module):
+    """
+    MagNetでエンコードされた複素数ベクトルを受け取り、
+    デッキ8枚をSum Poolingして勝敗を予測する超軽量モデル
+    """
+    def __init__(self, hidden_dim):
         super().__init__()
-        # カードをベクトル空間に配置する層
-        self.embedding = nn.Embedding(num_cards, embed_dim)
-        
-        # 相手のデッキを見て、警戒すべきカードを見つけるAttention機構
-        self.cross_attn = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=4, batch_first=True)
-        
-        if pretrained_embeddings is not None:
-            # 渡された重みをコピーして上書きする
-            self.embedding.weight.data.copy_(pretrained_embeddings)
-            # ※ここで requires_grad = True のままにしておくことで、
-            # 勝敗予測タスクに合わせて「シナジー」から「カウンター」へと重みが微調整（再学習）されます。
-            print("✨ 事前学習済みのEmbedding（重み）をロードしました！")
+        # 入力次元数の計算:
+        # 実部と虚部で2倍、自分と相手のデッキでさらに2倍 -> hidden_dim * 4
+        input_dim = hidden_dim * 4
 
-        # 最終判定ネットワーク
-        self.fc = nn.Sequential(
-            nn.Linear(embed_dim * 2, 64),
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, 256),
+            nn.LayerNorm(256),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(64, 1)
-        )
-
-    def forward(self, deck_A, deck_B):
-        # 1. 8枚のカードIDをベクトルに変換
-        emb_A = self.embedding(deck_A) # (batch, 8, embed_dim)
-        emb_B = self.embedding(deck_B)
-        
-        # 2. Cross Attention (AはBを警戒し、BはAを警戒する)
-        attn_A2B, _ = self.cross_attn(query=emb_A, key=emb_B, value=emb_B) 
-        attn_B2A, _ = self.cross_attn(query=emb_B, key=emb_A, value=emb_A) 
-        
-        # 3. 8枚の情報を「デッキ総合力」に圧縮
-        pool_A = attn_A2B.mean(dim=1)
-        pool_B = attn_B2A.mean(dim=1)
-        
-        # 4. ガッチャンコして勝敗判定
-        x = torch.cat([pool_A, pool_B], dim=1)
-        return self.fc(x)
-    
-# ==========================================
-# モデル2: 平均値プーリング -> 重要度スコアを算出するAttentionプーリング版
-# ==========================================
-class AttentionPoolingPredictor(nn.Module):
-    def __init__(self, num_cards, embed_dim=64, pretrained_embeddings=None):
-        super().__init__()
-        # 1. カードの埋め込み層
-        self.embedding = nn.Embedding(num_cards, embed_dim)
-        
-        if pretrained_embeddings is not None:
-            self.embedding.weight.data.copy_(pretrained_embeddings)
-            print("✨ 事前学習済みのEmbedding（重み）を AttentionPoolingPredictor にロードしました！")
-
-        # 2. 相手デッキへの警戒（Cross-Attention）
-        self.cross_attn = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=4, batch_first=True)
-        
-        # 🌟 3. アテンションプーリング層（重要度スコア算出用）
-        self.attention_pooling = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim // 2),
-            nn.Tanh(), # 非線形な関係を捉える
-            nn.Linear(embed_dim // 2, 1)
-        )
-
-        # 4. 最終勝敗判定ネットワーク
-        self.fc = nn.Sequential(
-            nn.Linear(embed_dim * 2, 64),
+            nn.Linear(256, 64),
             nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(64, 1)
+            nn.Linear(64, 1) # 最終的な勝敗ロジット（>0なら勝ち、<0なら負け）
         )
 
-    def forward(self, deck_A, deck_B):
-        # [Step 1] 8枚のカードIDをベクトルに変換
-        emb_A = self.embedding(deck_A) # (batch, 8, embed_dim)
-        emb_B = self.embedding(deck_B)
+    def forward(self, x_real, x_imag, my_decks, op_decks):
+        """
+        my_decks, op_decks: [batch_size, 8] (各デッキのカードIDリスト)
+        """
+        # 1. バッチ内の各カードのベクトルを抽出 [batch_size, 8, hidden_dim]
+        my_real = x_real[my_decks]
+        my_imag = x_imag[my_decks]
+        op_real = x_real[op_decks]
+        op_imag = x_imag[op_decks]
+
+        # 2. デッキの単純加算（Sum Pooling） [batch_size, hidden_dim]
+        my_real_sum = my_real.sum(dim=1)
+        my_imag_sum = my_imag.sum(dim=1)
+        op_real_sum = op_real.sum(dim=1)
+        op_imag_sum = op_imag.sum(dim=1)
+
+        # 3. 特徴量の結合（複素数空間を実数空間のロングベクトルに展開）
+        # [batch_size, hidden_dim * 4]
+        features = torch.cat([my_real_sum, my_imag_sum, op_real_sum, op_imag_sum], dim=-1)
+
+        # 4. MLPによる勝敗判定
+        logits = self.mlp(features)
         
-        # [Step 2] Cross Attention (相手のカードを踏まえた状態へ更新)
-        attn_A2B, _ = self.cross_attn(query=emb_A, key=emb_B, value=emb_B) 
-        attn_B2A, _ = self.cross_attn(query=emb_B, key=emb_A, value=emb_A) 
-        
-        # 🌟 [Step 3] アテンションプーリング 🌟
-        # ① 各カードが「この試合においてどれくらい重要か」のスコアを計算 -> (batch, 8, 1)
-        score_A = self.attention_pooling(attn_A2B)
-        score_B = self.attention_pooling(attn_B2A)
-        
-        # ② Softmax関数で、8枚の重要度の合計が1.0（100%）になるよう変換（重み付け）
-        weight_A = torch.softmax(score_A, dim=1)
-        weight_B = torch.softmax(score_B, dim=1)
-        
-        # ③ 各カードのベクトルに重要度の重みを掛けて、足し合わせる（デッキ総合力へ圧縮） -> (batch, embed_dim)
-        pool_A = torch.sum(attn_A2B * weight_A, dim=1)
-        pool_B = torch.sum(attn_B2A * weight_B, dim=1)
-        
-        # [Step 4] 自分と相手のデッキ総合力を結合して判定
-        x = torch.cat([pool_A, pool_B], dim=1)
-        return self.fc(x)
+        return logits.squeeze(-1)
