@@ -112,7 +112,7 @@ class CrossAttentionPredictor(nn.Module):
         super().__init__()
         # カードをベクトル空間に配置する層
         self.embedding = nn.Embedding(num_cards, embed_dim)
-        
+        self.embedding.weight.requires_grad = False # 事前学習の重みを固定
         # 相手のデッキを見て、警戒すべきカードを見つけるAttention機構
         self.cross_attn = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=4, batch_first=True)
         
@@ -121,7 +121,7 @@ class CrossAttentionPredictor(nn.Module):
             self.embedding.weight.data.copy_(pretrained_embeddings)
             # ※ここで requires_grad = True のままにしておくことで、
             # 勝敗予測タスクに合わせて「シナジー」から「カウンター」へと重みが微調整（再学習）されます。
-            print("✨ 事前学習済みのEmbedding（重み）をロードしました！")
+            print("事前学習済みのEmbedding（重み）をロード")
 
         # 最終判定ネットワーク
         self.fc = nn.Sequential(

@@ -13,7 +13,7 @@ if __name__ == "__main__":
     TRAIN_CSV = 'data/train_matches.csv'
     TEST_CSV  = 'data/test_matches.csv'
     
-    #ENCODER_TYPE = "transformer" # "multi-hot,  "transformer" のいずれかを選択
+    #ENCODER_TYPE: "multi-hot,  "raw_id" のいずれかを選択
     ENCODER_TYPE = "raw_id"
     EPOCHS = 100      
     LR = 0.001
@@ -35,7 +35,7 @@ if __name__ == "__main__":
     EMBED_DIM = 128
     pretrained_path = 'models/pretrained_model.pth'
 
-    print(f"📦 事前学習ファイル {pretrained_path} を読み込んでいます...")
+    print(f" 事前学習ファイル {pretrained_path} を読み込んでいます...")
     try:
         state_dict = torch.load(pretrained_path, map_location=device, weights_only=True)
         target_key = 'embedding.weight' 
