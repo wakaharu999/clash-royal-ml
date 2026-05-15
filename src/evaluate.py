@@ -9,7 +9,7 @@ import os
 from match_model import CrossAttentionPredictor, MatchupPredictor, prepare_dataloaders
 
 if __name__ == "__main__":
-    print("📊 モデルの詳細評価を開始します...")
+    print(" モデルの詳細評価を開始します...")
 
     # ==========================================
     # 1. 評価設定（ここで3形態を切り替えます）
@@ -17,15 +17,15 @@ if __name__ == "__main__":
     TRAIN_CSV = 'data/train_matches.csv'
     TEST_CSV  = 'data/test_matches.csv'
     
-    # 🌟 評価したいモデルの組み合わせを指定してください
+    #  評価したいモデルの組み合わせを指定
     # MODEL_TYPE: "base" (MatchupPredictor) または "attention" (CrossAttentionPredictor)
-    MODEL_TYPE = "base"      
+    MODEL_TYPE = "base_model"      
     
     # ENCODER_TYPE: "raw_id" または "multi-hot" (※attentionの場合は必ずraw_idにしてください)
-    ENCODER_TYPE = "raw_id"  
+    ENCODER_TYPE = "multi-hot"  
     
     # 評価するモデルのファイル名（trainで保存したものに合わせてください）
-    MODEL_PATH = 'best_model.pth' 
+    MODEL_PATH = 'models/base_model.pth' 
     EMBED_DIM = 128
     
     OUTPUT_CSV = 'evaluation_details.csv' 
@@ -36,7 +36,7 @@ if __name__ == "__main__":
     # ==========================================
     # 2. データの準備
     # ==========================================
-    print(f"📦 テストデータを読み込んでいます... (モデル: {MODEL_TYPE}, エンコード: {ENCODER_TYPE})")
+    print(f" テストデータを読み込んでいます... (モデル: {MODEL_TYPE}, エンコード: {ENCODER_TYPE})")
     _, test_loader, vector_dim, _ = prepare_dataloaders(
         train_csv_path=TRAIN_CSV, 
         test_csv_path=TEST_CSV,
@@ -48,7 +48,7 @@ if __name__ == "__main__":
     # ==========================================
     print(f"🧠 保存されたモデル '{MODEL_PATH}' をロード中...")
     
-    # 🌟 3形態の切り替え
+    #  3形態の切り替え
     if MODEL_TYPE == "attention":
         # 形態1: CrossAttention (評価時は pretrained_embeddings=None でOK)
         model = CrossAttentionPredictor(
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     # 学習済みの重みを読み込んで上書き（これで事前学習の知識も復元されます）
     model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
     model.eval()
-    print("✅ ロード完了")
+    print(" ロード完了")
 
     # ==========================================
     # 4. 予測の実行
@@ -77,7 +77,7 @@ if __name__ == "__main__":
     deck_A_list = []
     deck_B_list = []
 
-    print("🔍 テストデータで予測を実行中...")
+    print(" テストデータで予測を実行中...")
     with torch.no_grad():
         for deck_A, deck_B, labels in test_loader:
             deck_A, deck_B = deck_A.to(device), deck_B.to(device)
@@ -101,29 +101,32 @@ if __name__ == "__main__":
     # 5. 評価結果の出力
     # ==========================================
     print("\n" + "="*40)
-    print("🎯 【予測結果レポート】")
+    print(" 【予測結果レポート】")
     print("="*40)
-    cm = confusion_matrix(all_labels, all_preds)
+    
+    cm = confusion_matrix(all_labels, all_preds, normalize='true')*100
+    
     print(classification_report(all_labels, all_preds, target_names=["Lose", "Win"]))
     
     accuracy = (all_preds == all_labels).mean()
-    print(f"✨ 最終正答率 (Accuracy): {accuracy * 100:.2f}%")
-    print(f"   - 実際の勝ち試合を当てた数: {cm[1, 1]} 🙆‍♂️")
-    print(f"   - 実際の負け試合を当てた数: {cm[0, 0]} 🙅‍♂️")
-    print(f"   - 勝ちと予測して負けた数 (False Positive): {cm[0, 1]} 🤦‍♂️")
-    print(f"   - 負けと予測して勝った数 (False Negative): {cm[1, 0]} 🙆‍♂️")
+    print(f" 最終正答率 (Accuracy): {accuracy * 100:.2f}%")
+    print(f"   - 実際の勝ち試合を当てた数: {cm[1, 1]:.1f}% 🙆‍♂️")
+    print(f"   - 実際の負け試合を当てた数: {cm[0, 0]:.1f}% 🙅‍♂️")
+    print(f"   - 勝ちと予測して負けた数 (False Positive): {cm[0, 1]:.1f}% 🤦‍♂️")
+    print(f"   - 負けと予測して勝った数 (False Negative): {cm[1, 0]:.1f}% 🙆‍♂️")
 
     # --- 6. 混同行列の画像保存 ---
     plt.figure(figsize=(6, 5))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+    
+    sns.heatmap(cm, annot=True, fmt='.1f', cmap='Blues', 
                 xticklabels=["Predict: Lose", "Predict: Win"], 
                 yticklabels=["Actual: Lose", "Actual: Win"])
-    plt.title('Confusion Matrix: Clash Royale Matchup')
+    plt.title('Confusion Matrix (Normalized %)')
     plt.ylabel('Actual Result')
     plt.xlabel('Predicted Result')
     plt.tight_layout()
     plt.savefig(OUTPUT_IMG)
-    print(f"\n🖼️ 混同行列の画像を保存しました: {OUTPUT_IMG}")
+    print(f"\n 混同行列の画像を保存しました: {OUTPUT_IMG}")
 
     # --- 7. 詳細な予測結果のCSV書き出し ---
     df_results = pd.DataFrame({
@@ -139,4 +142,4 @@ if __name__ == "__main__":
     df_results = df_results.sort_values(by='Confidence', ascending=False)
     
     df_results.to_csv(OUTPUT_CSV, index=False)
-    print(f"📄 詳細な予測結果をCSVに保存しました: {OUTPUT_CSV}")
+    print(f" 詳細な予測結果をCSVに保存しました: {OUTPUT_CSV}")

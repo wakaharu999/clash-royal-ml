@@ -14,7 +14,7 @@ if __name__ == "__main__":
     TEST_CSV  = 'data/test_matches.csv'
     
     #ENCODER_TYPE: "multi-hot,  "raw_id" のいずれかを選択
-    ENCODER_TYPE = "multi-hot"  
+    ENCODER_TYPE = "raw_id"  
     EPOCHS = 100      
     LR = 0.0005
     PATIENCE = 10
@@ -53,8 +53,8 @@ if __name__ == "__main__":
         print(f"⚠️ エラー: ファイル '{pretrained_path}' が見つかりません。ランダム初期化で進めます。")
         pretrained_weights = None
 
-    #model = CrossAttentionPredictor(num_cards=vector_dim, embed_dim= EMBED_DIM, pretrained_embeddings=pretrained_weights).to(device)
-    model = MatchupPredictor(num_cards=vector_dim,embed_dim=EMBED_DIM,pretrained_embeddings=pretrained_weights, encoder_type=ENCODER_TYPE).to(device)
+    model = CrossAttentionPredictor(num_cards=vector_dim, embed_dim= EMBED_DIM, pretrained_embeddings=pretrained_weights).to(device)
+    #model = MatchupPredictor(num_cards=vector_dim,embed_dim=EMBED_DIM,pretrained_embeddings=pretrained_weights, encoder_type=ENCODER_TYPE).to(device)
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=LR)
     criterion = nn.BCEWithLogitsLoss()
 
