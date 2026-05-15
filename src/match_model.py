@@ -84,55 +84,74 @@ def prepare_dataloaders(train_csv_path, test_csv_path, encoder_type="multi-hot",
     return train_loader, test_loader, vector_dim, len(Y_train)
 
 # ==========================================
-# 予測モデル本体 (ベースモデル)
+# 1. 基本の全結合モデル (ハイブリッド対応)
 # ==========================================
 class MatchupPredictor(nn.Module):
-    def __init__(self, vector_dim):
+    def __init__(self, num_cards, embed_dim=128, pretrained_embeddings=None, encoder_type="raw_id"):
         super().__init__()
-        self.fc1 = nn.Linear(vector_dim * 2, 128)
-        self.fc2 = nn.Linear(128, 64)
-        self.out = nn.Linear(64, 1)
-        
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.3)
+        self.encoder_type = encoder_type
 
-    def forward(self, deck_A, deck_B):
-        x = torch.cat([deck_A, deck_B], dim=1)
-        x = self.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.relu(self.fc2(x))
-        x = self.dropout(x)
-        return self.out(x)
-    
-# ==========================================
-# 新モデル: Cross-Attention Predictor
-# ==========================================
-class CrossAttentionPredictor(nn.Module):
-    def __init__(self, num_cards, embed_dim=64,pretrained_embeddings=None):
-        super().__init__()
-        # カードをベクトル空間に配置する層
-        self.embedding = nn.Embedding(num_cards, embed_dim)
-        self.embedding.weight.requires_grad = False # 事前学習の重みを固定
-        # 相手のデッキを見て、警戒すべきカードを見つけるAttention機構
-        self.cross_attn = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=4, batch_first=True)
-        
-        if pretrained_embeddings is not None:
-            # 渡された重みをコピーして上書きする
-            self.embedding.weight.data.copy_(pretrained_embeddings)
-            # ※ここで requires_grad = True のままにしておくことで、
-            # 勝敗予測タスクに合わせて「シナジー」から「カウンター」へと重みが微調整（再学習）されます。
-            print("事前学習済みのEmbedding（重み）をロード")
+        if self.encoder_type == "raw_id":
+            # raw_idモード: Embedding層を使用
+            self.embedding = nn.Embedding(num_cards, embed_dim)
+            if pretrained_embeddings is not None:
+                self.embedding.weight.data.copy_(pretrained_embeddings)
+            # 入力サイズ: (128次元 * 8枚) * 2 = 2048
+            self.input_dim = embed_dim * 8 * 2
+        else:
+            # multi-hotモード: Embeddingを使わず、121次元のベクトルを直接使う
+            self.input_dim = num_cards * 2
 
-        # 最終判定ネットワーク
         self.fc = nn.Sequential(
-            nn.Linear(embed_dim * 2, 64),
+            nn.Linear(self.input_dim, 256),
             nn.ReLU(),
             nn.Dropout(0.3),
+            nn.Linear(256, 64),
+            nn.ReLU(),
             nn.Linear(64, 1)
         )
 
     def forward(self, deck_A, deck_B):
-        # 1. 8枚のカードIDをベクトルに変換
+        if self.encoder_type == "raw_id":
+            # IDをベクトルに変換してフラット化
+            x_A = self.embedding(deck_A).view(deck_A.size(0), -1)
+            x_B = self.embedding(deck_B).view(deck_B.size(0), -1)
+        else:
+            # すでにベクトルの場合はそのまま使用
+            x_A, x_B = deck_A, deck_B
+
+        x = torch.cat([x_A, x_B], dim=1)
+        return self.fc(x)
+
+# ==========================================
+# 2. クロスアテンションモデル 
+# ==========================================
+class CrossAttentionPredictor(nn.Module):
+    def __init__(self, num_cards, embed_dim=64, pretrained_embeddings=None):
+        super().__init__()
+        
+        # カードをベクトル空間に配置する層
+        self.embedding = nn.Embedding(num_cards, embed_dim)
+        
+        # 事前学習データがあるときだけコピーして凍結する
+        if pretrained_embeddings is not None:
+            self.embedding.weight.data.copy_(pretrained_embeddings)
+            self.embedding.weight.requires_grad = False 
+            print(" 事前学習済みのEmbeddingをロードし、重みを凍結しました")
+
+        # 相手のデッキを見て、警戒すべきカードを見つけるAttention機構
+        self.cross_attn = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=4, batch_first=True)
+        
+        # 最終判定ネットワーク
+        self.fc = nn.Sequential(
+            nn.Linear(embed_dim * 2, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, 1)
+        )
+
+    def forward(self, deck_A, deck_B):
+        # 1. 凍結されたEmbeddingで基本ベクトルを取得
         emb_A = self.embedding(deck_A) # (batch, 8, embed_dim)
         emb_B = self.embedding(deck_B)
         
