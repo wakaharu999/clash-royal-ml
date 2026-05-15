@@ -7,22 +7,25 @@ import ast
 import json
 
 # 作成したモデルをインポート
-from match_model import MagNetEncoder, SimpleSumPredictor
+from match_model import MagNetEncoder, CrossAttentionPredictor
 
 # --- 設定パラメータ ---
-GRAPH_PATH = "data/directed_graph.pt"
+GRAPH_PATH = "models/directed_graph.pt"
 MATCHES_CSV_PATH = "data/matches.csv"
 CARDS_JSON_PATH = "data/cards.json"
 
 HIDDEN_DIM = 128
 BATCH_SIZE = 256
 EPOCHS = 50
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 1e-4
 
 def load_card_mapping():
     with open(CARDS_JSON_PATH, 'r', encoding='utf-8') as f:
         cards_data = json.load(f)
-    card_ids = sorted([item['id'] for item in cards_data['items']])
+    
+    # JSONのキー（"26000020"などの文字列）を数値(int)に変換してソート
+    card_ids = sorted([int(card_id) for card_id in cards_data.keys()])
+    
     id_to_idx = {cid: i for i, cid in enumerate(card_ids)}
     return id_to_idx, len(card_ids)
 
@@ -44,10 +47,18 @@ def prepare_dataset(id_to_idx):
         except KeyError:
             continue
             
-        # ここは既に my/op が分かれているので、Data Augmentation は不要（またはシンプルに）
+        result_val = float(row['result'])
+        
+        # 引き分け(0)などのノイズは除外する（勝敗が明確なデータのみ学習させる）
+        if result_val == 0.0:
+            continue
+            
         my_decks.append(m_idx)
         op_decks.append(o_idx)
-        labels.append(float(row['result']))
+        
+        # 勝ち(1) なら 1.0、負け(-1) なら 0.0 をラベルとして保存
+        label = 1.0 if result_val > 0 else 0.0
+        labels.append(label)
 
     my_decks_tensor = torch.tensor(my_decks, dtype=torch.long)
     op_decks_tensor = torch.tensor(op_decks, dtype=torch.long)
@@ -72,14 +83,14 @@ def train():
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
     
     # MagNet用に構築した有向グラフをロード
-    graph_data = torch.load(GRAPH_PATH).to(device)
+    graph_data = torch.load(GRAPH_PATH, weights_only=False).to(device)
     edge_index = graph_data.edge_index
     edge_weight = graph_data.edge_attr
 
     # 2. モデルの初期化
     encoder = MagNetEncoder(num_cards=num_cards, hidden_dim=HIDDEN_DIM).to(device)
-    predictor = SimpleSumPredictor(hidden_dim=HIDDEN_DIM).to(device)
-    
+    predictor = CrossAttentionPredictor(hidden_dim=HIDDEN_DIM).to(device)
+
     # BCEWithLogitsLoss は内部でSigmoidをかけるので、Predictorの出力(Logit)をそのまま渡せる
     criterion = nn.BCEWithLogitsLoss()
     

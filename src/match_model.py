@@ -1,8 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pytorch_geometric_signed_directed.nn.directed import MagNetConv # type: ignore
-
+from torch_geometric_signed_directed.nn.directed import MagNetConv
 class MagNetEncoder(nn.Module):
     """
     全カードの有向グラフ（カウンター関係）を読み込み、
@@ -84,6 +83,67 @@ class SimpleSumPredictor(nn.Module):
         features = torch.cat([my_real_sum, my_imag_sum, op_real_sum, op_imag_sum], dim=-1)
 
         # 4. MLPによる勝敗判定
+        logits = self.mlp(features)
+        
+        return logits.squeeze(-1)
+    
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+# ... (MagNetEncoderの定義はそのまま) ...
+
+class CrossAttentionPredictor(nn.Module):
+    """
+    MagNetの出力（8枚のカードベクトル）を受け取り、
+    自分と相手のデッキ間でCross-Attentionを計算して勝敗を予測するモデル
+    """
+    def __init__(self, hidden_dim, num_heads=4, dropout=0.3):
+        super().__init__()
+        
+        # 実部と虚部を結合するため、カード1枚あたりの次元数は hidden_dim * 2 になる
+        self.embed_dim = hidden_dim * 2
+        
+        # Cross-Attention層 (batch_first=True で [batch, seq, dim] を受け付ける)
+        self.cross_attn_my_to_op = nn.MultiheadAttention(embed_dim=self.embed_dim, num_heads=num_heads, dropout=dropout, batch_first=True)
+        self.cross_attn_op_to_my = nn.MultiheadAttention(embed_dim=self.embed_dim, num_heads=num_heads, dropout=dropout, batch_first=True)
+        
+        # Attention後の特徴量を処理する層
+        self.layer_norm1 = nn.LayerNorm(self.embed_dim)
+        self.layer_norm2 = nn.LayerNorm(self.embed_dim)
+        
+        # 最終判定用MLP (自分の8枚の集約ベクトル + 相手の8枚の集約ベクトル)
+        self.mlp = nn.Sequential(
+            nn.Linear(self.embed_dim * 2, 256),
+            nn.GELU(), # Transformerと相性の良いGELUを採用
+            nn.Dropout(dropout),
+            nn.Linear(256, 64),
+            nn.GELU(),
+            nn.Linear(64, 1)
+        )
+
+    def forward(self, x_real, x_imag, my_decks, op_decks):
+        # 1. 各カードの実部と虚部を抽出し、結合する [batch_size, 8, hidden_dim * 2]
+        my_emb = torch.cat([x_real[my_decks], x_imag[my_decks]], dim=-1)
+        op_emb = torch.cat([x_real[op_decks], x_imag[op_decks]], dim=-1)
+        
+        # 2. Cross-Attentionの計算
+        # Q: 自分, K,V: 相手 -> 「自分のカードが、相手のどのカードを警戒すべきか」
+        attn_my, _ = self.cross_attn_my_to_op(query=my_emb, key=op_emb, value=op_emb)
+        # Q: 相手, K,V: 自分 -> 「相手のカードが、自分のどのカードを警戒しているか」
+        attn_op, _ = self.cross_attn_op_to_my(query=op_emb, key=my_emb, value=my_emb)
+        
+        # 3. 残差接続 (Residual Connection) と Layer Normalization
+        my_features = self.layer_norm1(my_emb + attn_my)
+        op_features = self.layer_norm2(op_emb + attn_op)
+        
+        # 4. Pooling (8枚のカードベクトルを1つに集約)
+        # Attentionで「相手を踏まえた上での役割」が計算済みなので、ここはSumやMeanでOK
+        my_pooled = my_features.mean(dim=1)  # [batch_size, embed_dim]
+        op_pooled = op_features.mean(dim=1)  # [batch_size, embed_dim]
+        
+        # 5. MLPで勝敗判定
+        features = torch.cat([my_pooled, op_pooled], dim=-1) # [batch_size, embed_dim * 2]
         logits = self.mlp(features)
         
         return logits.squeeze(-1)
