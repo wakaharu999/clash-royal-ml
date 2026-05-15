@@ -3,7 +3,7 @@ import os
 import json
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from src.match_model import CrossAttentionPredictor
+from model import CrossAttentionPredictor
 
 app = FastAPI(title="Clash Royale Match API")
 
