@@ -83,3 +83,48 @@ class SimpleSumPredictor(nn.Module):
         logits = self.mlp(features)
         
         return logits.squeeze(-1)
+    
+class MagNetCrossAttentionPredictor(nn.Module):
+    """
+    MagNetが生成した「環境全体の相性ベクトル」を受け取り、
+    試合の盤面（8枚 vs 8枚）でCross-Attentionをかけて局所的な有利不利を判定する最終キメラモデル
+    """
+    def __init__(self, hidden_dim, num_heads=4, dropout=0.3):
+        super().__init__()
+        # 実部(繋がり)と虚部(相性の方向)を結合するため、カード1枚あたりの次元数は hidden_dim * 2 になる
+        self.embed_dim = hidden_dim * 2
+
+        # 相手のデッキを見て、自分のどのカードが刺さるか（警戒すべきか）を計算する層
+        self.cross_attn_my = nn.MultiheadAttention(embed_dim=self.embed_dim, num_heads=num_heads, dropout=dropout, batch_first=True)
+        self.cross_attn_op = nn.MultiheadAttention(embed_dim=self.embed_dim, num_heads=num_heads, dropout=dropout, batch_first=True)
+
+        # 最終勝敗判定用MLP
+        self.mlp = nn.Sequential(
+            nn.Linear(self.embed_dim * 2, 256),
+            nn.LayerNorm(256),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1)
+        )
+
+    def forward(self, x_real, x_imag, my_decks, op_decks):
+        amplitude = torch.sqrt(x_real**2 + x_imag**2 + 1e-8)
+        phase = torch.atan2(x_imag, x_real)
+
+        # 実部・虚部の代わりに、振幅と位相を結合して渡す [batch_size, 8, embed_dim]
+        my_emb = torch.cat([amplitude[my_decks], phase[my_decks]], dim=-1)
+        op_emb = torch.cat([amplitude[op_decks], phase[op_decks]], dim=-1)
+
+        # 2. クロスアテンション計算 (以下は今のコードのままでOK)
+        attn_my, _ = self.cross_attn_my(query=my_emb, key=op_emb, value=op_emb)
+        attn_op, _ = self.cross_attn_op(query=op_emb, key=my_emb, value=my_emb)
+
+        pool_my = attn_my.mean(dim=1)
+        pool_op = attn_op.mean(dim=1)
+
+        features = torch.cat([pool_my, pool_op], dim=-1)
+        logits = self.mlp(features)
+
+        return logits.squeeze(-1)

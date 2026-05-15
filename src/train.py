@@ -7,7 +7,7 @@ import numpy as np
 import json
 from sklearn.metrics import accuracy_score
 
-from model import MagNetEncoder, SimpleSumPredictor
+from model import MagNetEncoder, SimpleSumPredictor, MagNetCrossAttentionPredictor
 
 # --- 1. 設定 ---
 GRAPH_PATH = "models/directed_graph.pt"
@@ -19,8 +19,8 @@ SAVE_PATH = 'models/best_model.pth'
 HIDDEN_DIM = 128
 BATCH_SIZE = 256
 EPOCHS = 100      
-LR = 1e-4  # MagNetは学習率が低め(1e-4)の方が安定します
-PATIENCE = 5
+LR = 5e-5  # MagNetは学習率が低め(1e-4)の方が安定します
+PATIENCE = 10
 
 def load_card_mapping():
     """cards.jsonからIDマッピングを作成（グラフのノード番号と合わせるため必須）"""
@@ -104,8 +104,8 @@ if __name__ == "__main__":
         print(f"⚠️ 警告: '{PRETRAINED_PATH}' が見つかりません。ランダム初期化で進めます。")
 
     # Predictor は最強の Cross-Attention モデルを使用
-    predictor = SimpleSumPredictor(hidden_dim=HIDDEN_DIM).to(device)
-    
+    #predictor = SimpleSumPredictor(hidden_dim=HIDDEN_DIM).to(device)
+    predictor = MagNetCrossAttentionPredictor(hidden_dim=HIDDEN_DIM).to(device)
     criterion = nn.BCEWithLogitsLoss()
     
     # 🌟 Encoderは固定したので、Optimizerには Predictor のパラメータだけを渡す
