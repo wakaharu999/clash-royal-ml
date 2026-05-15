@@ -88,14 +88,28 @@ if __name__ == "__main__":
 
     # --- 3. モデルの初期化 ---
     encoder = MagNetEncoder(num_cards=num_cards, hidden_dim=HIDDEN_DIM).to(device)
+    
+    # 🌟 事前学習済みの MagNet 重みをロードする
+    PRETRAINED_PATH = "models/pretrained_magnet.pth"
+    try:
+        encoder.load_state_dict(torch.load(PRETRAINED_PATH, map_location=device, weights_only=True))
+        print("✨ 事前学習済みの MagNetEncoder (相性辞書) をロードしました！")
+        
+        # 🌟 Encoderの重みを完全に固定（フリーズ）する
+        for param in encoder.parameters():
+            param.requires_grad = False
+        print("🔒 Encoderの重みを固定しました。Predictorのみを学習させます。")
+            
+    except FileNotFoundError:
+        print(f"⚠️ 警告: '{PRETRAINED_PATH}' が見つかりません。ランダム初期化で進めます。")
+
+    # Predictor は最強の Cross-Attention モデルを使用
     predictor = SimpleSumPredictor(hidden_dim=HIDDEN_DIM).to(device)
     
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(
-        list(encoder.parameters()) + list(predictor.parameters()), 
-        lr=LR, weight_decay=1e-4
-    )
-
+    
+    # 🌟 Encoderは固定したので、Optimizerには Predictor のパラメータだけを渡す
+    optimizer = optim.Adam(predictor.parameters(), lr=LR)
     # --- 4. 学習ループ (Early Stopping搭載) ---
     print(f"🔥 学習スタート (最大 {EPOCHS} epochs)...")
     best_val_acc = 0.0
