@@ -8,7 +8,7 @@ from src.match_model import CrossAttentionPredictor
 app = FastAPI(title="Clash Royale Match API")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, 'models', 'best_model.pth')
+MODEL_PATH = os.path.join(BASE_DIR, 'models', 'attention_model.pth')
 CARDS_JSON_PATH = os.path.join(BASE_DIR, 'data', 'cards.json')
 
 # 1. マスターデータのロードとマッピング作成
@@ -19,7 +19,7 @@ def load_card_master():
     id_to_name = {str(k): v['name'] for k, v in data.items()}
     name_to_id = {v['name'].lower(): int(k) for k, v in data.items()}
     
-    # 🌟 ここが重要！学習時(np.unique)と同じように、IDを小さい順に並べて 0~120 の連番を振る
+    # IDを小さい順に並べて 0~120 の連番を振る
     sorted_raw_ids = sorted([int(k) for k in data.keys()])
     raw_id_to_idx = {raw_id: idx for idx, raw_id in enumerate(sorted_raw_ids)}
     
@@ -49,7 +49,7 @@ async def predict(request: MatchupRequest):
                 raw_id = NAME_TO_ID[name_lower]
                 raw_ids.append(raw_id)
                 
-                # 🌟 生ID (27000009) を モデル用の連番 (0-120) に変換して渡す！
+                #  生ID (27000009) を モデル用の連番 (0-120) に変換して渡す
                 if raw_id in RAW_ID_TO_IDX:
                     indices.append(RAW_ID_TO_IDX[raw_id])
                 else:
@@ -64,7 +64,7 @@ async def predict(request: MatchupRequest):
         raw_ids_a, idx_a = resolve_ids(request.deck_a)
         raw_ids_b, idx_b = resolve_ids(request.deck_b)
 
-        # 🌟 モデル入力用には「インデックス(0-120)」のテンソルを使う
+        #  モデル入力用には「インデックス(0-120)」のテンソルを使う
         t_a = torch.tensor([idx_a], dtype=torch.long).to(DEVICE)
         t_b = torch.tensor([idx_b], dtype=torch.long).to(DEVICE)
 

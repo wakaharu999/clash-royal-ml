@@ -16,7 +16,7 @@ if __name__ == "__main__":
     TRAIN_CSV = 'data/train_matches.csv' # 語彙を揃えるためにTrainも読み込みます
     TEST_CSV  = 'data/test_matches.csv'
     ENCODER_TYPE = "raw_id"
-    MODEL_PATH = 'models/best_model.pth'
+    MODEL_PATH = 'models/attention_model.pth'
     EMBED_DIM = 128
     
     OUTPUT_CSV = 'evaluation_details.csv' # 予測結果を書き出すCSVファイル
@@ -111,15 +111,12 @@ if __name__ == "__main__":
         'Deck_B_Opponent': [str(d.tolist()) for d in deck_B_list]    # 相手側のデッキ
     })
 
-    # 「モデルが自信満々だった順（確率が0か1に近い順）」でソートして保存すると分析しやすい
     df_results['Confidence'] = abs(df_results['Win_Probability'] - 0.5)
     df_results = df_results.sort_values(by='Confidence', ascending=False).drop(columns=['Confidence'])
 
     df_results.to_csv(OUTPUT_CSV, index=False)
     print(f"📝 予測詳細のCSVを保存しました: {OUTPUT_CSV}")
 
-    # --- 8. ちょっとしたエラー分析のヒント ---
+    # --- 8. エラー分析のヒント ---
     wrong_high_conf = df_results[(df_results['Is_Correct'] == False) & (df_results['Win_Probability'] > 0.8)]
     print(f"\n🚨 [分析] モデルが80%以上の自信を持って『絶対勝てる！』と予測したのに負けた試合数: {len(wrong_high_conf)}件")
-    if len(wrong_high_conf) > 0:
-         print("   -> evaluation_details.csv を開いてこの試合のデッキを深掘りすると、モデルが知らない『隠れメタ』が見つかるはずです！")
