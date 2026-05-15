@@ -85,20 +85,14 @@ class SimpleSumPredictor(nn.Module):
         return logits.squeeze(-1)
     
 class MagNetCrossAttentionPredictor(nn.Module):
-    """
-    MagNetが生成した「環境全体の相性ベクトル」を受け取り、
-    試合の盤面（8枚 vs 8枚）でCross-Attentionをかけて局所的な有利不利を判定する最終キメラモデル
-    """
     def __init__(self, hidden_dim, num_heads=4, dropout=0.3):
         super().__init__()
-        # 実部(繋がり)と虚部(相性の方向)を結合するため、カード1枚あたりの次元数は hidden_dim * 2 になる
         self.embed_dim = hidden_dim * 2
+        self.num_heads = num_heads # マスク作成のためにHead数を保存
 
-        # 相手のデッキを見て、自分のどのカードが刺さるか（警戒すべきか）を計算する層
         self.cross_attn_my = nn.MultiheadAttention(embed_dim=self.embed_dim, num_heads=num_heads, dropout=dropout, batch_first=True)
         self.cross_attn_op = nn.MultiheadAttention(embed_dim=self.embed_dim, num_heads=num_heads, dropout=dropout, batch_first=True)
 
-        # 最終勝敗判定用MLP
         self.mlp = nn.Sequential(
             nn.Linear(self.embed_dim * 2, 256),
             nn.LayerNorm(256),
@@ -109,18 +103,33 @@ class MagNetCrossAttentionPredictor(nn.Module):
             nn.Linear(64, 1)
         )
 
-    def forward(self, x_real, x_imag, my_decks, op_decks):
+    def forward(self, x_real, x_imag, my_decks, op_decks, adj_matrix):
+        # 1. 振幅と位相への変換 [batch_size, 8, embed_dim]
         amplitude = torch.sqrt(x_real**2 + x_imag**2 + 1e-8)
         phase = torch.atan2(x_imag, x_real)
 
-        # 実部・虚部の代わりに、振幅と位相を結合して渡す [batch_size, 8, embed_dim]
         my_emb = torch.cat([amplitude[my_decks], phase[my_decks]], dim=-1)
         op_emb = torch.cat([amplitude[op_decks], phase[op_decks]], dim=-1)
 
-        # 2. クロスアテンション計算 (以下は今のコードのままでOK)
-        attn_my, _ = self.cross_attn_my(query=my_emb, key=op_emb, value=op_emb)
-        attn_op, _ = self.cross_attn_op(query=op_emb, key=my_emb, value=my_emb)
+        #  2. グラフマスクの動的生成
+        # [batch_size, 8, 8] の部分隣接行列（対面するカード間に関係があるか）を抽出
+        mask_my_to_op = adj_matrix[my_decks.unsqueeze(2), op_decks.unsqueeze(1)]
+        
+        # PyTorch仕様: 0.0は計算オン、非常に小さなマイナス値は計算オフ（マスク）
+        # ※全カードと関係ない場合は均等に分散するように -10000.0 を使用
+        attn_mask = torch.where(mask_my_to_op > 0, 0.0, -10000.0)
+        
+        # Head数分だけバッチ方向にコピー [batch_size * num_heads, 8, 8]
+        attn_mask = attn_mask.repeat_interleave(self.num_heads, dim=0)
 
+        # 相手視点からのマスク（転置するだけ）
+        attn_mask_op = attn_mask.transpose(1, 2)
+
+        #  3. マスク付きクロスアテンション計算
+        attn_my, _ = self.cross_attn_my(query=my_emb, key=op_emb, value=op_emb, attn_mask=attn_mask)
+        attn_op, _ = self.cross_attn_op(query=op_emb, key=my_emb, value=my_emb, attn_mask=attn_mask_op)
+
+        # 4. プーリングと最終判定
         pool_my = attn_my.mean(dim=1)
         pool_op = attn_op.mean(dim=1)
 

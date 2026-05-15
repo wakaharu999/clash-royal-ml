@@ -86,6 +86,13 @@ if __name__ == "__main__":
     edge_index = graph_data.edge_index
     edge_weight = graph_data.edge_attr
 
+    # マスクアテンション用の隣接行列を作成 
+    adj_matrix = torch.zeros((num_cards, num_cards), device=device)
+    adj_matrix[edge_index[0], edge_index[1]] = 1.0
+    
+    # 「自分が有利」「相手が有利」どちらでも関係性を考慮できるよう、無向化(対称化)しておく
+    adj_matrix = (adj_matrix + adj_matrix.t() > 0).float()
+
     # --- 3. モデルの初期化 ---
     encoder = MagNetEncoder(num_cards=num_cards, hidden_dim=HIDDEN_DIM).to(device)
     
@@ -126,7 +133,7 @@ if __name__ == "__main__":
             optimizer.zero_grad()
             
             x_real, x_imag = encoder(edge_index, edge_weight)
-            logits = predictor(x_real, x_imag, dA, dB)
+            logits = predictor(x_real, x_imag, dA, dB, adj_matrix)
             
             loss = criterion(logits, labels)
             loss.backward()
@@ -146,7 +153,7 @@ if __name__ == "__main__":
                 dA, dB, labels = dA.to(device), dB.to(device), labels.to(device)
                 
                 x_real, x_imag = encoder(edge_index, edge_weight)
-                logits = predictor(x_real, x_imag, dA, dB)
+                logits = predictor(x_real, x_imag, dA, dB, adj_matrix)
                 
                 loss = criterion(logits, labels)
                 val_loss += loss.item()

@@ -3,7 +3,7 @@ import os
 import json
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from model import CrossAttentionPredictor
+from model import MagNetCrossAttentionPredictor
 
 app = FastAPI(title="Clash Royale Match API")
 
@@ -29,7 +29,7 @@ ID_TO_NAME, NAME_TO_ID, RAW_ID_TO_IDX = load_card_master()
 
 # 2. モデルのロード
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = CrossAttentionPredictor(num_cards=121, embed_dim=128)
+model = MagNetCrossAttentionPredictor(num_cards=121, embed_dim=128)
 model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
 model.eval()
 
